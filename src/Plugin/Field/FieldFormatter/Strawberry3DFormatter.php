@@ -12,15 +12,15 @@ use Drupal\Core\Field\FieldItemListInterface;
 use Drupal\strawberryfield\Tools\Ocfl\OcflHelper;
 use Drupal\Core\Form\FormStateInterface;
 use Drupal\Core\Cache\Cache;
-use Drupal\format_strawberryfield\Tools\IiifHelper;
+use Drupal\Core\Url;
 
 /**
- * Simplistic Strawberry Field formatter.
+ * Simplistic Strawberry 3D Field formatter.
  *
  * @FieldFormatter(
- *   id = "strawberry_pannellum_formatter",
- *   label = @Translation("Strawberry Field Panorama Formatter using Pannellum and IIIF"),
- *   class = "\Drupal\format_strawberryfield\Plugin\Field\FieldFormatter\StrawberryPannellumFormatter",
+ *   id = "strawberry_3d_formatter",
+ *   label = @Translation("Strawberry Field 3D Model Formatter"),
+ *   class = "\Drupal\format_strawberryfield\Plugin\Field\FieldFormatter\Strawberry3DFormatter",
  *   field_types = {
  *     "strawberryfield_field"
  *   },
@@ -29,23 +29,16 @@ use Drupal\format_strawberryfield\Tools\IiifHelper;
  *   }
  * )
  */
-class StrawberryPannellumFormatter extends StrawberryBaseFormatter {
+class Strawberry3DFormatter extends StrawberryBaseFormatter {
   /**
    * {@inheritdoc}
    */
   public static function defaultSettings() {
     return parent::defaultSettings() + [
-      'json_key_source' => 'as:image',
-      'json_key_hotspots' => 'hotspot',
+      'json_key_source' => 'as:model',
       'max_width' => 600,
       'max_height' => 400,
-      'panorama_type' => 'equirectangular',
-      'image_type' => 'jpg',
-      'number_images' => 1,
-      // todo: quality, rotation, and hotspotdebug not used but I put them in schema for now
-      'quality' => 'default',
-      'rotation' => '0',
-      'hotSpotDebug' => TRUE,
+      'number_models' => 1,
     ];
   }
 
@@ -59,15 +52,10 @@ class StrawberryPannellumFormatter extends StrawberryBaseFormatter {
         '#title' => t('JSON Key from where to fetch Media URLs'),
         '#default_value' => $this->getSetting('json_key_source'),
       ],
-      'json_key_hotspots' => [
-        '#type' => 'textfield',
-        '#title' => t('JSON Key from where to fetch Pannellum Hotspots'),
-        '#default_value' => $this->getSetting('json_key_hotspots'),
-      ],
-      'number_images' => [
+      'number_models' => [
         '#type' => 'number',
-        '#title' => $this->t('Number of images'),
-        '#default_value' => $this->getSetting('number_images'),
+        '#title' => $this->t('Number of 3D Models'),
+        '#default_value' => $this->getSetting('number_models'),
         '#size' => 2,
         '#maxlength' => 2,
         '#min' => 0,
@@ -98,15 +86,16 @@ class StrawberryPannellumFormatter extends StrawberryBaseFormatter {
    */
   public function settingsSummary() {
     $summary = parent::settingsSummary();
-    $summary[] = $this->t('Displays Panoramas from JSON using Pannellum and a IIIF server endpoint');
+    $summary[] = $this->t('Displays 3 Models from JSON using the JSM Modeller Library');
+
     if ($this->getSetting('json_key_source')) {
       $summary[] = $this->t('Media fetched from JSON "%json_key_source" key', [
         '%json_key_source' => $this->getSetting('json_key_source'),
       ]);
     }
-    if ($this->getSetting('number_images')) {
-      $summary[] = $this->t('Number of images: "%number"', [
-        '%number' => $this->getSetting('number_images'),
+    if ($this->getSetting('number_models')) {
+      $summary[] = $this->t('Number of 3D Models: "%number"', [
+        '%number' => $this->getSetting('number_models'),
       ]);
     }
     if ($this->getSetting('max_width') && $this->getSetting('max_height')) {
@@ -137,11 +126,12 @@ class StrawberryPannellumFormatter extends StrawberryBaseFormatter {
     $elements = [];
     $max_width = $this->getSetting('max_width');
     $max_height = $this->getSetting('max_height');
-    $number_images =  $this->getSetting('number_images');
+    $number_models =  $this->getSetting('number_models');
     /* @var \Drupal\file\FileInterface[] $files */
     // Fixing the key to extract while coding to 'Media'
     $key = $this->getSetting('json_key_source');
-    $hotspots =  $this->getSetting('json_key_hotspots');
+    $baseiiifserveruri = $this->getSetting('iiif_base_url');
+    $baseiiifserveruri_internal =  $this->getSetting('iiif_base_url_internal');
 
     $nodeuuid = $items->getEntity()->uuid();
     $nodeid = $items->getEntity()->id();
@@ -164,26 +154,25 @@ class StrawberryPannellumFormatter extends StrawberryBaseFormatter {
           ]);
         return $elements[$delta] = ['#markup' => $this->t('ERROR')];
       }
-      /* Expected structure of an Media item inside JSON
-      "as:image": {
-         "s3:\/\/f23\/new-metadata-en-image-58455d91acf7290275c1cab77531b7f561a11a84.jpg": {
+      /* Expected structure of an Model item inside JSON
+      "as:model": {
+         "urn:uuid:someuuid": {
          "fid": 32, // Drupal's FID
-         "for": "add_some_master_images", // The webform element key that generated this one
-         "url": "s3:\/\/f23\/new-metadata-en-image-58455d91acf7290275c1cab77531b7f561a11a84.jpg",
-         "name": "new-metadata-en-image-a8d0090cbd2cd3ca2ab16e3699577538f3049941.jpg",
-         "type": "Image",
+         "for": "add_some_master_3dmodel", // The webform element key that generated this one
+         "url": "s3:\/\/f23\/new-metadata-en-image-58455d91acf7290275c1cab77531b7f561a11a84.stl",
+         "name": "new-metadata-en-model-a8d0090cbd2cd3ca2ab16e3699577538f3049941.stl",
+         "type": "Model",
          "checksum": "f231aed5ae8c2e02ef0c5df6fe38a99b"
          }
       }*/
       $i = 0;
       if (isset($jsondata[$key])) {
-        $iiifhelper = new IiifHelper($this->getIiifUrls()['public'], $this->getIiifUrls()['internal']);
         foreach ($jsondata[$key] as $mediaitem) {
           $i++;
-          if ($i > $number_images) {
+          if ($i > $number_models) {
             break;
           }
-          if (isset($mediaitem['type']) && $mediaitem['type'] == 'Image') {
+          if (isset($mediaitem['type']) && $mediaitem['type'] == 'Model') {
             if (isset($mediaitem['dr:fid'])) {
               // @TODO check if loading the entity is really needed to check access.
               // @TODO we can refactor a lot here and move it to base methods
@@ -197,100 +186,47 @@ class StrawberryPannellumFormatter extends StrawberryBaseFormatter {
               // means we have a broken/missing media reference
               // we should inform to logs and continue
               if ($this->checkAccess($file)) {
-                $iiifidentifier = urlencode(
-                  file_uri_target($file->getFileUri())
-                );
+                $audiourl = $file->getFileUri();
+                // We assume here file could not be accessible publicly
+                $route_parameters = [
+                  'node' => $nodeid,
+                  'uuid' => $file->uuid(),
+                  'format' => 'default.'. pathinfo($file->getFilename(), PATHINFO_EXTENSION)
+                ];
+                $publicurl = Url::fromRoute('format_strawberryfield.iiifbinary', $route_parameters);
 
-                if ($iiifidentifier == NULL || empty($iiifidentifier)) {
-                  continue;
-                  // @TODO add a default Thumbnail here.
-                }
                 $filecachetags = $file->getCacheTags();
                 //@TODO check this filecachetags and see if they make sense
 
-
                 $uniqueid =
                   'iiif-'.$items->getName(
-                  ).'-'.$nodeuuid.'-'.$delta.'-panorama'.$i;
+                  ).'-'.$nodeuuid.'-'.$delta.'-model'.$i;
                 $htmlid = $uniqueid;
 
                 $cache_contexts = ['url.site', 'url.path', 'url.query_args','user.permissions'];
                 // @ see https://www.drupal.org/files/issues/2517030-125.patch
                 $cache_tags = Cache::mergeTags($filecachetags, $items->getEntity()->getCacheTags());
-                // http://localhost:8183/iiif/2/e8c%2Fa-new-label-en-image-05066d9ae32580cffb38342323f145f74faf99a1.jpg/full/220,/0/default.jpg
-                $iiifpublicinfojson = $iiifhelper->getPublicInfoJson($iiifidentifier);
-                $iiifsizes = $iiifhelper->getImageSizes();
-
-                if (!$iiifsizes) {
-                  $message= $this->t('We could not fetch Image sizes from IIIF @url <br> for node @id, defaulting to base formatter configuration.',
-                    [
-                      '@url' => $iiifpublicinfojson,
-                      '@id' => $nodeid,
-                    ]);
-                  \Drupal::logger('format_strawberryfield')->warning($message);
-                  //continue; // Nothing can be done here?
-                }
-                else {
-                  //@see \template_preprocess_image for further theme_image() attributes.
-                  // Look. This one uses the public accesible base URL. That is how world works.
-                  if (($max_width == 0) && ($max_height == 0)) {
-                    $max_width = $iiifsizes[0]['width'];
-                    $max_height = $iiifsizes[0]['height'];
-                  }
-                  if (($max_width == 0) &&  ($max_height > 0)){
-                    $max_width = round($iiifsizes[0]['width']/$iiifsizes[0]['height'] * $max_height,0);
-
-                  }
-                  elseif (($max_width > 0) &&  ($max_height == 0)){
-                    $max_height = round($iiifsizes[0]['height']/$iiifsizes[0]['width'] * $max_width,0);
-                  }
-                  // Pannellum recommends max 4096 pixel width images for WebGl. Lets use that as max.
-                  $max_width_source = ($iiifsizes[0]['width'] > 4096) ? '4096,' : 'max';
-
-                  // todo: put this in IiifHelper
-                  $iiifserverimg = "{$this->getIiifUrls()['public']}{$iiifidentifier}"."/full/{$max_width_source}/0/default.jpg";
-                  $elements[$delta]['panorama' . $i] = [
-                    '#type' => 'container',
+                // For Textures and materials see
+                // https://github.com/kovacsv/Online3DViewer/blob/master/embeddable/multiple.html
+                  $elements[$delta]['model' . $i] = [
+                    '#type' => 'html_tag',
+                    '#tag' => 'canvas',
                     '#attributes' => [
-                      'class' => ['field-iiif', 'strawberry-panorama-item'],
+                      'class' => ['field-iiif', 'strawberry-3d-item'],
                       'id' => $htmlid,
-                      'data-iiif-image' => $iiifserverimg,
+                      'data-iiif-model' => $publicurl->toString(),
                       'data-iiif-image-width' => $max_width,
                       'data-iiif-image-height' => $max_height,
-                    ],
+                      'height' => $max_height,
+                      'width' => $max_width
+                     ],
                     '#title' => $this->t(
-                      'Panorama for @label',
+                      '3D Model for @label',
                       ['@label' => $items->getEntity()->label()]
                     )
                   ];
                   // Lets add hotspots
-                  $elements[$delta]['#attached']['drupalSettings']['format_strawberryfield']['pannellum'][$htmlid]['nodeuuid'] = $nodeuuid;
-                  $elements[$delta]['#attached']['library'][] = 'format_strawberryfield/iiif_pannellum_strawberry';
-                  // Hotspots are a list of objects in the form of
-                  /*{
-                    "yaw": "-14.626185026728738",
-                     "text": "Sheryl's team at the Theater",
-                    "type": "info",
-                    "pitch": "-4.409886580572494"
-                   }, */
-                  // @TODO enable multiple scenes and more hotspot options
-
-                  if (isset($jsondata[$hotspots])) {
-                    $hotspotsjs = [];
-                    $i=0;
-                    foreach ($jsondata[$hotspots] as $hotspotitems) {
-                      $i++;
-                      $hotspotdefaults = [
-                        'id' => $i,
-                        'pitch' => 0,
-                        'yaw' => 0,
-                        'type' => 'info',
-                        'text' => '',
-                      ];
-                      $hotspotsjs[] = $hotspotitems + $hotspotdefaults;
-                    }
-                    $elements[$delta]['#attached']['drupalSettings']['format_strawberryfield']['pannellum'][$htmlid]['hotspots'] = $hotspotsjs;
-                  }
+                  $elements[$delta]['#attached']['library'][] = 'format_strawberryfield/jsm_model_strawberry';
 
                   if (isset($item->_attributes)) {
                     $elements[$delta] += ['#attributes' => []];
@@ -305,14 +241,14 @@ class StrawberryPannellumFormatter extends StrawberryBaseFormatter {
                 // @TODO Deal with no access here
                 // Should we put a thumb? Just hide?
                 // @TODO we can bring a plugin here and there that deals with
-                $elements[$delta]['panorama'.$i] = [
+                $elements[$delta]['model'.$i] = [
                   '#markup' => '<i class="fas fa-times-circle"></i>',
                   '#prefix' => '<span>',
                   '#suffix' => '</span>',
                 ];
               }
             } elseif (isset($mediaitem['url'])) {
-              $elements[$delta]['[panorama'.$i] = [
+              $elements[$delta]['[model'.$i] = [
                 '#markup' => 'Non managed '.$mediaitem['url'],
                 '#prefix' => '<pre>',
                 '#suffix' => '</pre>',
@@ -320,7 +256,7 @@ class StrawberryPannellumFormatter extends StrawberryBaseFormatter {
             }
 
           }
-        }
+
       }
     }
     return $elements;
