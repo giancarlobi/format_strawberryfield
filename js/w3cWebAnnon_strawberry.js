@@ -2,7 +2,7 @@
 
     'use strict';
 
-    Drupal.behaviors.format_strawberryfield_mirador_initiate = {
+    Drupal.behaviors.format_strawberryfield_w3cwebannon_initiate = {
         attach: function(context, settings) {
             $('.strawberry-mirador-item[data-iiif-infojson]').once('attache_mirador')
                 .each(function (index, value) {
@@ -43,7 +43,7 @@
                         }
                         //@TODO add an extra Manifests key with every other one so people can select the others.
                         var miradorInstance = Mirador.viewer($options);
-                        console.log('initializing Mirador 3.0.0-RC5')
+                        console.log('initializing WC3 Annotation service')
                     }
                 })}}
 })(jQuery, Drupal, drupalSettings, window.Mirador);
